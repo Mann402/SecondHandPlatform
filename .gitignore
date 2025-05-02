@@ -361,3 +361,11 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+
+plaintext
+node_modules/
+android/.gradle/
+android/app/build/
+ios/Pods/
+*.keystore
+.env
