@@ -1,8 +1,10 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using SecondHandPlatform.Interfaces;
 using SecondHandPlatform.Models;
+using System.Collections;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
 
 namespace SecondHandPlatform.Controllers
 {
@@ -11,27 +13,43 @@ namespace SecondHandPlatform.Controllers
     public class ProductsController : ControllerBase
     {
         private readonly IProductRepository _productRepository;
+            private readonly ILogger<ProductsController> _logger; 
 
         public ProductsController(IProductRepository productRepository)
         {
             _productRepository = productRepository;
         }
 
-
-
-        // GET /api/Products/{id} <--- Add this
-        [HttpGet("{id}")]
-        public async Task<ActionResult<Product>> GetProductById(int id)
+        // GET /api/Products/{id}
+        [HttpGet("{id:int}")]
+        public async Task<ActionResult<object>> GetProductById(int id)
         {
-            var product = await _productRepository.GetProductByIdAsync(id);
-            if (product == null)
-                return NotFound("Product not found.");
+            var p = await _productRepository.GetProductByIdAsync(id);
+            if (p == null) return NotFound();
+            return Ok(new
+            {
+                p.ProductId,
+                p.ProductName,
+                Category = p.Category.Name,
+                p.ProductDescription,
+                p.ProductCondition,
+                Price = (p.ProductStatus == "Verified" && p.VerifiedPrice.HasValue)
+                                ? p.VerifiedPrice.Value
+                                : p.ProductPrice,
+                ImageBase64 = p.ProductImage != null
+                                ? Convert.ToBase64String(p.ProductImage)
+                                : null,
 
-            return Ok(product);
+                isVerificationRequested = p.IsVerificationRequested,
+                verificationRequestedDate = p.VerificationRequestedDate,
+                productStatus = p.ProductStatus,
+                datePosted = p.DatePosted,
+                isSold = p.IsSold
+            });
         }
 
         [HttpGet]
-        public async Task<ActionResult<IEnumerable<Product>>> GetProducts()
+        public async Task<ActionResult<IEnumerable<object>>> GetProducts()
         {
             var all = await _productRepository.GetAllProductsAsync();
 
@@ -39,23 +57,37 @@ namespace SecondHandPlatform.Controllers
             var shaped = all.Select(p => new {
                 p.ProductId,
                 p.ProductName,
+                Category = p.Category.Name,
                 Price = (p.ProductStatus == "Verified" && p.VerifiedPrice.HasValue)
                             ? p.VerifiedPrice.Value
                             : p.ProductPrice,
                 ImageBase64 = p.ProductImage != null
                             ? Convert.ToBase64String(p.ProductImage)
                             : null,
-                p.ProductStatus
+                productStatus = p.ProductStatus,
+                datePosted = p.DatePosted
             });
 
             return Ok(shaped);
         }
-        [HttpGet("User/{userId}")]
-        public async Task<ActionResult<IEnumerable<Product>>> GetUserProducts(int userId)
+
+
+        [HttpGet("User/{userId:int}")]
+        public async Task<ActionResult<IEnumerable<object>>> GetUserProducts(int userId)
         {
-            var products = await _productRepository.GetUserProductsAsync(userId);
-            return Ok(products);
+            var list = await _productRepository.GetUserProductsAsync(userId);
+            var shaped = list.Select(p => new {
+                p.ProductId,
+                p.ProductName,
+                category = p.Category.Name,
+                price = (p.ProductStatus == "Verified" && p.VerifiedPrice.HasValue)
+                                 ? p.VerifiedPrice.Value
+                                 : p.ProductPrice,
+                productStatus = p.ProductStatus
+            });
+            return Ok(shaped);
         }
+      
 
         [HttpPost]
         public async Task<IActionResult> AddProduct([FromBody] Product product)
@@ -67,25 +99,26 @@ namespace SecondHandPlatform.Controllers
             return Ok(new { message = "Product added successfully and is pending verification!" });
         }
 
+      
         [HttpPut("{id}")]
-        public async Task<IActionResult> UpdateProduct(int id, [FromBody] Product updatedProduct)
+        public async Task<IActionResult> UpdateProduct(int id, [FromBody] ProductUpdateDto dto)
         {
             var product = await _productRepository.GetProductByIdAsync(id);
-            if (product == null)
-                return NotFound("Product not found.");
+            if (product == null) return NotFound();
 
-            // Update fields
-            product.ProductName = updatedProduct.ProductName;
-            product.ProductDescription = updatedProduct.ProductDescription;
-            product.ProductCategory = updatedProduct.ProductCategory;
-            product.ProductPrice = updatedProduct.ProductPrice;
-            product.ProductCondition = updatedProduct.ProductCondition;
-            product.ProductImage = updatedProduct.ProductImage;
-            product.ProductStatus = "Pending Verification";
+            // apply only the fields we expect
+            product.ProductName = dto.ProductName;
+            product.ProductDescription = dto.ProductDescription;
+            product.CategoryId = dto.CategoryId;
+            product.ProductPrice = dto.ProductPrice;
+            product.ProductCondition = dto.ProductCondition;
+            product.ProductImage = dto.ProductImage;
+            product.ProductStatus = "Unverified";
 
             await _productRepository.UpdateProductAsync(product);
-            return Ok(new { message = "Product updated successfully!" });
+            return Ok();
         }
+
 
         [HttpDelete("{id}")]
         public async Task<IActionResult> DeleteProduct(int id)
@@ -117,6 +150,67 @@ namespace SecondHandPlatform.Controllers
 
             // If you know it’s always a JPEG:
             return File(product.ProductImage, "image/jpeg");
+        }
+
+        // GET /api/Products/category/{slug}
+        [HttpGet("category/{slug}")]
+        public async Task<ActionResult<IEnumerable<object>>> GetByCategory(string slug)
+        {
+            try { 
+            var list = await _productRepository.GetByCategorySlugAsync(slug);
+            var shaped = list.Select(p => new {
+                p.ProductId,
+                p.ProductName,
+                Category = p.Category.Name,
+                Price = (p.ProductStatus == "Verified" && p.VerifiedPrice.HasValue)
+                                ? p.VerifiedPrice.Value
+                                : p.ProductPrice,
+                ImageBase64 = p.ProductImage != null
+                                ? Convert.ToBase64String(p.ProductImage)
+                                : null,
+                productStatus = p.ProductStatus,
+                datePosted = p.DatePosted
+
+            });
+            return Ok(shaped);
+        }
+            catch (Exception ex)
+            {
+                
+                return StatusCode(500, $"Server error: {ex.Message}");
+            }
+        }
+
+
+        public class RequestVerificationDto
+        {
+            public int UserId { get; set; }
+        }
+
+        [HttpPost("{id}/requestVerification")]
+        public async Task<IActionResult> RequestVerification(
+            int id,
+            [FromBody] RequestVerificationDto dto)
+        {
+            var p = await _productRepository.GetProductByIdAsync(id);
+            if (p == null) return NotFound();
+
+            p.IsVerificationRequested = true;
+            p.VerificationRequestedDate = DateTime.UtcNow;
+            await _productRepository.UpdateProductAsync(p);
+
+            return Ok(new { message = "Your request has been sent to admin." });
+        }
+
+
+        public class ProductUpdateDto
+        {
+            public string ProductName { get; set; } = null!;
+            public string ProductDescription { get; set; } = null!;
+            public int CategoryId { get; set; }         // NEW
+            public decimal ProductPrice { get; set; }
+            public string ProductCondition { get; set; } = null!;
+            public byte[]? ProductImage { get; set; }
         }
 
     }

@@ -1,7 +1,6 @@
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.OpenApi.Models;
-using SecondHandPlatform.Data;
 using SecondHandPlatform.Interfaces;
 using SecondHandPlatform.Models;
 using SecondHandPlatform.Repositories;
@@ -12,11 +11,6 @@ using System.Text.Json.Serialization;
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.AddDbContext<ApplicationDbContext>(options =>
-    options.UseMySql(
-        builder.Configuration.GetConnectionString("DefaultConnection"),
-        ServerVersion.AutoDetect(builder.Configuration.GetConnectionString("DefaultConnection"))
-));
 
 builder.Services.AddDbContext<SecondhandplatformContext>(options =>
     options.UseMySql(
@@ -93,10 +87,6 @@ app.UseCors("AllowReactApp");
 app.UseRouting(); // Ensures correct request routing
 
 app.UseAuthorization();
-
-
-
-app.UseHttpsRedirection();
 
 app.MapControllers();
 

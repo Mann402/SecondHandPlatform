@@ -1,5 +1,4 @@
 ﻿using Microsoft.AspNetCore.Mvc;
-using SecondHandPlatform.Data;
 using SecondHandPlatform.Models;
 using Microsoft.EntityFrameworkCore;
 using SecondHandPlatform.DTOs;
@@ -11,9 +10,9 @@ namespace SecondHandPlatformTest.Controllers
     [ApiController]
     public class AdminController : ControllerBase
     {
-        private readonly ApplicationDbContext _context;
+        private readonly SecondhandplatformContext _context;
 
-        public AdminController(ApplicationDbContext context)
+        public AdminController(SecondhandplatformContext context)
         {
             _context = context;
         }

@@ -32,6 +32,17 @@ public virtual DbSet<Cart> Carts { get; set; }
     public virtual DbSet<UserAddress> UserAddresses { get; set; }
 
     public virtual DbSet<OrderItem> OrderItems { get; set; }
+    public virtual DbSet<Category> Categories { get; set; }
+
+    public virtual DbSet<UserAccountManagement> UserAccountManagements { get; set; }
+
+    //Tables
+    public DbSet<Admin> Admins { set; get; }
+    public DbSet<ContentManagement> ContentManagements { get; set; }
+    public DbSet<CustomerSupport> CustomerSupports { get; set; }
+    public DbSet<EscrowPayment> EscrowPayments { get; set; }
+    public DbSet<Report> Reports { get; set; }
+
 
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
         => optionsBuilder.UseMySql("server=localhost;database=secondhandplatform;user=Puimann;password=Puimann", Microsoft.EntityFrameworkCore.ServerVersion.Parse("8.0.41-mysql"));
@@ -42,24 +53,7 @@ public virtual DbSet<Cart> Carts { get; set; }
             .UseCollation("utf8mb4_0900_ai_ci")
             .HasCharSet("utf8mb4");
 
-        // Prevent Order Deletion When Cart, Product, or User is Removed
-        modelBuilder.Entity<Order>()
-            .HasOne(o => o.Cart)
-            .WithMany(c => c.Orders)
-            .HasForeignKey(o => o.CartId)
-            .OnDelete(DeleteBehavior.SetNull);  //  Prevent order deletion when cart is deleted
 
-        modelBuilder.Entity<Order>()
-            .HasOne(o => o.Product)
-            .WithMany(p => p.Orders)
-            .HasForeignKey(o => o.ProductId)
-            .OnDelete(DeleteBehavior.Restrict);  //  Prevent order deletion when product is deleted
-
-        modelBuilder.Entity<Order>()
-            .HasOne(o => o.User)
-            .WithMany(u => u.Orders)
-            .HasForeignKey(o => o.UserId)
-            .OnDelete(DeleteBehavior.Restrict);  //  Prevent order deletion when user is deleted
 
         //  Ensure IsSold Default Value is False
         modelBuilder.Entity<Product>()
@@ -67,10 +61,6 @@ public virtual DbSet<Cart> Carts { get; set; }
             .HasDefaultValue(false)
             .HasColumnName("IsSold");
 
-        //  Ensure Default Order Status is 'Pending Verification'
-        modelBuilder.Entity<Order>()
-            .Property(o => o.OrderStatus)
-            .HasDefaultValue("Unverified");
 
 
         modelBuilder.Entity<Cart>(entity =>
@@ -176,45 +166,46 @@ public virtual DbSet<Cart> Carts { get; set; }
 
         modelBuilder.Entity<Order>(entity =>
         {
-            entity.HasKey(e => e.OrderId).HasName("PRIMARY");
-
+    
             entity.ToTable("orders");
+            entity.HasKey(o => o.OrderId).HasName("PRIMARY");
+           
+            entity.HasIndex(o => o.UserId, "user_id");
 
-            entity.HasIndex(e => e.CartId, "cart_id");
+            entity.Property(o => o.OrderId)
+                  .HasColumnName("order_id");
+            entity.Property(o => o.UserId)
+                  .HasColumnName("user_id");
+            entity.Property(o => o.TotalAmount)
+                  .HasPrecision(10, 2)
+                  .HasColumnName("total_amount");
+            entity.Property(o => o.OrderDate)
+                  .HasDefaultValueSql("CURRENT_TIMESTAMP")
+                  .HasColumnType("datetime")
+                  .HasColumnName("order_date");
+            entity.Property(o => o.OrderStatus)
+                  .HasMaxLength(50)
+                  .HasDefaultValue("Processing")     // ← default to "Processing" only
+                  .HasColumnName("order_status");
 
-            entity.HasIndex(e => e.ProductId, "product_id");
+            // link to User
+            entity.HasOne(o => o.User)
+                  .WithMany(u => u.Orders)
+                  .HasForeignKey(o => o.UserId)
+                  .HasConstraintName("orders_ibfk_1")
+                  .OnDelete(DeleteBehavior.Restrict);
 
-            entity.HasIndex(e => e.UserId, "user_id");
+            // NEW: 1-to-many to OrderItems
+            entity.HasMany(o => o.OrderItems)
+                  .WithOne(oi => oi.Order)
+                  .HasForeignKey(oi => oi.OrderId)
+                  .OnDelete(DeleteBehavior.Cascade);
 
-            entity.Property(e => e.OrderId).HasColumnName("order_id");
-            entity.Property(e => e.CartId).HasColumnName("cart_id");
-            entity.Property(e => e.OrderDate)
-                .HasDefaultValueSql("CURRENT_TIMESTAMP")
-                .HasColumnType("datetime")
-                .HasColumnName("order_date");
-            entity.Property(e => e.OrderStatus)
-                .HasMaxLength(50)
-                .HasDefaultValue("Pending Verification")
-                .HasColumnName("order_status");
-            entity.Property(e => e.ProductId).HasColumnName("product_id");
-            entity.Property(e => e.TotalAmount)
-                .HasPrecision(10, 2)
-                .HasColumnName("total_amount");
-            entity.Property(e => e.UserId).HasColumnName("user_id");
 
-            entity.HasOne(d => d.Cart)
-                .WithMany(p => p.Orders)
-                .HasForeignKey(d => d.CartId)
-                .HasConstraintName("orders_ibfk_2")
-                .OnDelete(DeleteBehavior.SetNull);
-
-            entity.HasOne(d => d.Product).WithMany(p => p.Orders)
-                .HasForeignKey(d => d.ProductId)
-                .HasConstraintName("orders_ibfk_3");
-
-            entity.HasOne(d => d.User).WithMany(p => p.Orders)
-                .HasForeignKey(d => d.UserId)
-                .HasConstraintName("orders_ibfk_1");
+            entity.HasOne(o => o.Payment)
+                  .WithOne(p => p.Order)
+                  .HasForeignKey<Payment>(p => p.OrderId)
+                  .OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<Payment>(entity =>
@@ -242,9 +233,9 @@ public virtual DbSet<Cart> Carts { get; set; }
                 .HasDefaultValueSql("'Pending'")
                 .HasColumnName("payment_status");
 
-            entity.HasOne(d => d.Order).WithMany(p => p.Payments)
-                .HasForeignKey(d => d.OrderId)
-                .HasConstraintName("payments_ibfk_1");
+          entity.HasOne(p => p.Order)
+          .WithOne(o => o.Payment)
+          .HasForeignKey<Payment>(p => p.OrderId);
         });
 
         modelBuilder.Entity<OrderItem>(entity =>
@@ -293,9 +284,8 @@ public virtual DbSet<Cart> Carts { get; set; }
             entity.Property(e => e.IsSold)
                 .HasDefaultValue(false)
                 .HasColumnName("IsSold");
-            entity.Property(e => e.ProductCategory)
-                .HasMaxLength(50)
-                .HasColumnName("product_category");
+            entity.Property(p => p.CategoryId)
+               .HasColumnName("category_id");
             entity.Property(e => e.ProductCondition)
                 .HasMaxLength(20)
                 .HasColumnName("product_condition");
@@ -313,13 +303,18 @@ public virtual DbSet<Cart> Carts { get; set; }
                 .HasColumnName("product_price");
             entity.Property(e => e.ProductStatus)
                 .HasMaxLength(20)
-                .HasDefaultValueSql("Pending Verification")
+                .HasDefaultValue("Unverified")
                 .HasColumnName("product_status");
             entity.Property(e => e.UserId).HasColumnName("user_id");
 
             entity.HasOne(d => d.User).WithMany(p => p.Products)
                 .HasForeignKey(d => d.UserId)
                 .HasConstraintName("products_ibfk_1");
+            entity.HasOne(p => p.Category)
+             .WithMany(c => c.Products)
+             .HasForeignKey(p => p.CategoryId)
+             .OnDelete(DeleteBehavior.Restrict)    // or whatever behavior you want
+             .HasConstraintName("fk_products_categories");
         });
 
 
@@ -351,7 +346,8 @@ public virtual DbSet<Cart> Carts { get; set; }
 
             entity.HasOne(e => e.User)
                   .WithMany(u => u.UserAddresses)   // make sure User has `ICollection<UserAddress> UserAddresses`
-                  .HasForeignKey(e => e.UserId);
+                  .HasForeignKey(e => e.UserId)
+            .OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<User>(entity =>
@@ -381,6 +377,29 @@ public virtual DbSet<Cart> Carts { get; set; }
             entity.Property(e => e.UserStatus)
                 .HasMaxLength(20)
                 .HasColumnName("user_status");
+        });
+
+
+        modelBuilder.Entity<Category>(entity =>
+        {
+            entity.ToTable("categories");
+
+            entity.HasKey(c => c.CategoryId)
+                  .HasName("PRIMARY");
+
+            entity.Property(c => c.CategoryId)
+                  .HasColumnName("category_id");
+
+            entity.Property(c => c.Name)
+                  .HasColumnName("category_name")
+                  .HasMaxLength(100);
+
+            entity.Property(c => c.Slug)
+                  .HasColumnName("slug")
+                  .HasMaxLength(100);
+
+            entity.Property(c => c.DateCreated)
+                  .HasColumnName("date_created");
         });
 
         OnModelCreatingPartial(modelBuilder);

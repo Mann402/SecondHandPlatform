@@ -7,29 +7,34 @@ namespace SecondHandPlatform.Models
 [Table("products")]
 public partial class Product
 {
-    public int ProductId { get; set; }
+        [Column("product_id")]
+        public int ProductId { get; set; }
+        [Column("user_id")]
+        public int UserId { get; set; }
+        [Column("product_name")]
+        public string ProductName { get; set; } = null!;
+        [Column("product_description")]
+        public string ProductDescription { get; set; } = null!;
 
-    public int UserId { get; set; }
-
-    public string ProductName { get; set; } = null!;
-
-    public string ProductDescription { get; set; } = null!;
-
-    public string ProductCategory { get; set; } = null!;
-
-    public decimal ProductPrice { get; set; }
+        [Column("category_id")] public int CategoryId { get; set; }
+        public Category Category { get; set; } = null!;
+        [Column("product_price")]
+        public decimal ProductPrice { get; set; }
         [Column("verified_price")]
         public decimal? VerifiedPrice { get; set; }
+        [Column("product_condition")]
+        public string ProductCondition { get; set; }
+        [Column("product_status")]
+        public string ProductStatus { get; set; }
+        [Column("product_image")]
+        public byte[]? ProductImage { get; set; }
+        [Column("date_posted")]
+        public DateTime DatePosted { get; set; }
 
-    public string ProductCondition { get; set; } 
+        public bool IsVerificationRequested { get; set; }
+        public DateTime? VerificationRequestedDate { get; set; }
 
-    public string ProductStatus { get; set; } 
-
-    public byte[]? ProductImage { get; set; } 
-
-    public DateTime DatePosted { get; set; }
-
-    public bool IsSold { get; set; }
+        public bool IsSold { get; set; }
 
     public virtual ICollection<Cart> Carts { get; } = new List<Cart>();
 

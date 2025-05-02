@@ -1,9 +1,10 @@
 ﻿using Microsoft.EntityFrameworkCore;
-using SecondHandPlatform.Data;
 using SecondHandPlatform.Interfaces;
 using SecondHandPlatform.Models;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using System.Linq;
+
 
 namespace SecondHandPlatform.Repositories
 {
@@ -19,6 +20,7 @@ namespace SecondHandPlatform.Repositories
         public async Task<IEnumerable<Product>> GetVerifiedProductsAsync()
         {
             return await _context.Products
+                .Include(p => p.Category)
                 .Where(p => p.ProductStatus == "Verified" && !p.IsSold)
                 .ToListAsync();
         }
@@ -26,17 +28,23 @@ namespace SecondHandPlatform.Repositories
         public async Task<IEnumerable<Product>> GetUserProductsAsync(int userId)
         {
             return await _context.Products
+                .Include(p => p.Category)
                 .Where(p => p.UserId == userId)
                 .ToListAsync();
         }
 
+
+
         public async Task<Product> GetProductByIdAsync(int id)
         {
-            return await _context.Products.FindAsync(id);
+            return await _context.Products
+                .Include(p => p.Category)
+                .FirstOrDefaultAsync(p => p.ProductId == id);
         }
         public async Task<IEnumerable<Product>> GetAllProductsAsync()
         {
             return await _context.Products
+                .Include(p => p.Category)
                 .Where(p => !p.IsSold)          // omit sold items if you still want only available products
                 .ToListAsync();
         }
@@ -82,5 +90,29 @@ namespace SecondHandPlatform.Repositories
                 await _context.SaveChangesAsync();
             }
         }
+
+        public async Task<IEnumerable<Product>> GetByCategoryIdAsync(int categoryId)
+        {
+            return await _context.Products
+                .Include(p => p.Category)
+                .Where(p => p.CategoryId == categoryId && !p.IsSold)
+                .ToListAsync();
+        }
+
+        public async Task<IEnumerable<Product>> GetByCategorySlugAsync(string slug)
+        {
+            // normalize once in C#
+            var slugLower = slug.Trim().ToLower();
+
+            // case-insensitive compare on Category.Slug
+            return await _context.Products
+                .Include(p => p.Category)
+                .Where(p =>
+                    p.Category.Slug.ToLower() == slugLower
+                    && !p.IsSold
+                )
+                .ToListAsync();
+        }
     }
 }
+

@@ -1,7 +1,6 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using SecondHandPlatform.Models;
-using SecondHandPlatform.Data;
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
@@ -12,9 +11,9 @@ namespace SecondHandPlatformTest.Controllers
     [ApiController]
     public class EscrowPaymentController : ControllerBase
     {
-        private readonly ApplicationDbContext _context;
+        private readonly SecondhandplatformContext _context;
 
-        public EscrowPaymentController(ApplicationDbContext context)
+        public EscrowPaymentController(SecondhandplatformContext context)
         {
             _context = context;
         }

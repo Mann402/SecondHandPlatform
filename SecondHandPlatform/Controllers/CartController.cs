@@ -1,7 +1,6 @@
 ﻿// Controllers/CartController.cs
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using SecondHandPlatform.Data;
 using SecondHandPlatform.Models;
 using System;
 using System.Collections.Generic;

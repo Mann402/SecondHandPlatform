@@ -7,6 +7,7 @@ using System.Linq;
 using System;
 using Microsoft.EntityFrameworkCore.Storage;
 
+
 namespace SecondHandPlatform.Controllers
 {
     [Route("api/[controller]")]
@@ -25,48 +26,120 @@ namespace SecondHandPlatform.Controllers
         [HttpGet("user/{userId}")]
         public async Task<ActionResult<List<OrderDto>>> GetUserOrders(int userId)
         {
-            var orders = await _context.Orders
-                .Where(o => o.UserId == userId)
-                .Include(o => o.User) // BUYER nav
-                .Include(o => o.OrderItems)
-                   .ThenInclude(oi => oi.Product)
-                     .ThenInclude(p => p.User) // SELLER nav
-                .Include(o => o.Payments)
-                .ToListAsync();
+            // First, just get all the order IDs
+            var orderIds = new List<int>();
 
-            if (!orders.Any())
-                return NotFound("No orders found for this user.");
-
-            var result = orders.Select(o => new OrderDto
+            // Get order IDs in a separate connection
+            using (var command = _context.Database.GetDbConnection().CreateCommand())
             {
-                OrderId = o.OrderId,
-                OrderDate = o.OrderDate,
-                OrderStatus = o.OrderStatus ?? "",
-                BuyerId = o.UserId,
-                BuyerName = $"{o.User?.FirstName ?? ""} {o.User?.LastName ?? ""}".Trim(),
+                command.CommandText = $"SELECT order_id FROM orders WHERE user_id = {userId}";
 
-                Items = o.OrderItems.Select(oi => new OrderItemDto
+                if (command.Connection.State != System.Data.ConnectionState.Open)
+                    await command.Connection.OpenAsync();
+
+                using (var reader = await command.ExecuteReaderAsync())
                 {
-                    ProductId = oi.ProductId,
-                    ProductName = oi.Product?.ProductName ?? "",
-                    SellerName = $"{oi.Product?.User?.FirstName ?? ""} {oi.Product?.User?.LastName ?? ""}"
-                          .Trim(),
-                    Price = oi.Product?.ProductPrice ?? 0m,
-                    Quantity = oi.Quantity,
-                    ProductImage = oi.Product?.ProductImage != null
-       ? Convert.ToBase64String(oi.Product.ProductImage)
-       : null
+                    while (await reader.ReadAsync())
+                    {
+                        orderIds.Add(reader.GetInt32(0));
+                    }
+                }
+            }
 
-                }).ToList(),
+            // Now process each order separately
+            var orders = new List<OrderDto>();
 
-                PaymentMethod = o.Payments.FirstOrDefault()?.PaymentMethod ?? "Not specified",
-                PaymentDate = o.Payments.FirstOrDefault()?.PaymentDate
-            })
-            .ToList();
+            foreach (var orderId in orderIds)
+            {
+                var orderDto = new OrderDto
+                {
+                    OrderId = orderId,
+                    Items = new List<OrderItemDto>()
+                };
 
-            return Ok(result);
+                // Get order details
+                using (var command = _context.Database.GetDbConnection().CreateCommand())
+                {
+                    command.CommandText = @"
+                SELECT o.order_date, o.order_status, o.user_id,  , o.total_amount 
+                       u.first_name, u.last_name, 
+                       p.payment_method, p.payment_date
+                FROM orders o
+                LEFT JOIN users u ON o.user_id = u.user_id
+                LEFT JOIN payments p ON o.order_id = p.order_id
+                WHERE o.order_id = " + orderId;
+
+                    if (command.Connection.State != System.Data.ConnectionState.Open)
+                        await command.Connection.OpenAsync();
+
+                    using (var reader = await command.ExecuteReaderAsync())
+                    {
+                        if (await reader.ReadAsync())
+                        {
+                            orderDto.OrderDate = reader.GetDateTime(reader.GetOrdinal("order_date"));
+                            orderDto.OrderStatus = reader.IsDBNull(reader.GetOrdinal("order_status")) ?
+                                "" : reader.GetString(reader.GetOrdinal("order_status"));
+                            orderDto.BuyerId = reader.GetInt32(reader.GetOrdinal("user_id"));
+                            orderDto.BuyerName = string.Format("{0} {1}",
+                                reader.IsDBNull(reader.GetOrdinal("first_name")) ? "" : reader.GetString(reader.GetOrdinal("first_name")),
+                                reader.IsDBNull(reader.GetOrdinal("last_name")) ? "" : reader.GetString(reader.GetOrdinal("last_name"))
+                            ).Trim();
+                            orderDto.PaymentMethod = reader.IsDBNull(reader.GetOrdinal("payment_method")) ?
+                                "Not specified" : reader.GetString(reader.GetOrdinal("payment_method"));
+                            orderDto.PaymentDate = reader.IsDBNull(reader.GetOrdinal("payment_date")) ?
+                                null : (DateTime?)reader.GetDateTime(reader.GetOrdinal("payment_date"));
+                        }
+                    }
+                }
+
+                // Get order items
+                using (var command = _context.Database.GetDbConnection().CreateCommand())
+                {
+                    command.CommandText = @"
+                SELECT oi.product_id, oi.quantity, 
+                       p.product_name, p.product_price, p.product_image,
+                       u.first_name as seller_first_name, u.last_name as seller_last_name
+                FROM orderitems oi
+                JOIN products p ON oi.product_id = p.product_id
+                LEFT JOIN users u ON p.user_id = u.user_id
+                WHERE oi.order_id = " + orderId;
+
+                    if (command.Connection.State != System.Data.ConnectionState.Open)
+                        await command.Connection.OpenAsync();
+
+                    using (var reader = await command.ExecuteReaderAsync())
+                    {
+                        while (await reader.ReadAsync())
+                        {
+                            byte[] productImage = null;
+                            if (!reader.IsDBNull(reader.GetOrdinal("product_image")))
+                            {
+                                productImage = (byte[])reader["product_image"];
+                            }
+
+                            orderDto.Items.Add(new OrderItemDto
+                            {
+                                ProductId = reader.GetInt32(reader.GetOrdinal("product_id")),
+                                ProductName = reader.IsDBNull(reader.GetOrdinal("product_name")) ?
+                                    "" : reader.GetString(reader.GetOrdinal("product_name")),
+                                SellerName = string.Format("{0} {1}",
+                                    reader.IsDBNull(reader.GetOrdinal("seller_first_name")) ? "" : reader.GetString(reader.GetOrdinal("seller_first_name")),
+                                    reader.IsDBNull(reader.GetOrdinal("seller_last_name")) ? "" : reader.GetString(reader.GetOrdinal("seller_last_name"))
+                                ).Trim(),
+                                Price = reader.IsDBNull(reader.GetOrdinal("product_price")) ?
+                                    0m : reader.GetDecimal(reader.GetOrdinal("product_price")),
+                                Quantity = reader.GetInt32(reader.GetOrdinal("quantity")),
+                                ProductImage = productImage != null ? Convert.ToBase64String(productImage) : null
+                            });
+                        }
+                    }
+                }
+
+                orders.Add(orderDto);
+            }
+
+            return Ok(orders);
         }
-
         // GET /api/Order/Seller/{userId}
         // Returns all orders for products this user (the SELLER) has listed
         [HttpGet("seller/{userId}")]
@@ -77,7 +150,7 @@ namespace SecondHandPlatform.Controllers
                 .Include(o => o.OrderItems)
                    .ThenInclude(oi => oi.Product)
                      .ThenInclude(p => p.User) // SELLER nav
-                .Include(o => o.Payments)
+                .Include(o => o.Payment)
                 .Where(o => o.OrderItems.Any(oi => oi.Product.UserId == userId))
                 .ToListAsync();
 
@@ -105,8 +178,8 @@ namespace SecondHandPlatform.Controllers
                     })
                     .ToList(),
 
-                PaymentMethod = o.Payments.FirstOrDefault()?.PaymentMethod ?? "Not specified",
-                PaymentDate = o.Payments.FirstOrDefault()?.PaymentDate
+                PaymentMethod = o.Payment?.PaymentMethod ?? "Not specified",
+                PaymentDate = o.Payment?.PaymentDate
             })
             .ToList();
 
@@ -141,128 +214,108 @@ namespace SecondHandPlatform.Controllers
         [HttpPost]
         public async Task<IActionResult> PlaceOrder([FromBody] OrderRequest orderRequest)
         {
-            if (orderRequest == null || orderRequest.UserId == 0 || orderRequest.CartId == 0)
+            if (orderRequest == null || orderRequest.UserId == 0 || orderRequest.CartIds == null || !orderRequest.CartIds.Any())
             {
                 return BadRequest("UserId and CartId are required.");
             }
 
-            using var transaction = await _context.Database.BeginTransactionAsync();
+            // 1) load and validate cart items
+            var cartItems = await _context.Carts
+                .Where(c => orderRequest.CartIds.Contains(c.CartId))
+                .Include(c => c.Product)
+                .ToListAsync();
+
+            if (!cartItems.Any())
+                return BadRequest("Your cart is empty. Add products before placing an order.");
+
+            foreach (var c in cartItems)
+            {
+                var p = c.Product
+                     ?? throw new InvalidOperationException($"Product {c.ProductId} missing.");
+
+                // check via OrderItems now:
+                bool alreadyOrdered = await _context.OrderItems
+                    .AnyAsync(oi => oi.ProductId == p.ProductId);
+                if (alreadyOrdered)
+                    return BadRequest($"'{p.ProductName}' was already ordered.");
+
+                if (p.IsSold)
+                    return BadRequest($"'{p.ProductName}' is already sold.");
+
+                if (p.ProductStatus == "Rejected")
+                    return BadRequest($"'{p.ProductName}' is rejected.");
+            }
+
+            // 2) sum total
+            decimal totalAmount = cartItems.Sum(c => c.Product!.ProductPrice);
+
+            await using var tx = await _context.Database.BeginTransactionAsync();
             try
             {
-                Console.WriteLine("🚀 Debug: Transaction Started");
-
-                var cartItems = await _context.Carts
-                    .Where(c => c.UserId == orderRequest.UserId)
-                    .Include(c => c.Product)
-                    .ToListAsync();
-
-                if (!cartItems.Any())
+                // 3) create one Order
+                var order = new Order
                 {
-                    return BadRequest("Your cart is empty. Add products before placing an order.");
-                }
+                    UserId = orderRequest.UserId,
+                    OrderDate = DateTime.UtcNow,
+                    TotalAmount = totalAmount,
+                    OrderStatus = "Processing"
+                };
+                _context.Orders.Add(order);
+                await _context.SaveChangesAsync();  // order.OrderId now set
 
-                decimal totalAmount = 0;
-                List<Order> newOrders = new List<Order>();
-
-                foreach (var cartItem in cartItems)
+                // 4) create N OrderItems
+                var orderItems = cartItems.Select(c => new OrderItem
                 {
-                    var product = cartItem.Product;
-                    if (product == null)
-                    {
-                        return BadRequest($"Product ID {cartItem.ProductId} not found.");
-                    }
-
-                    // Check if product is already ordered
-                    bool isProductOrdered = await _context.Orders.AnyAsync(o => o.ProductId == product.ProductId);
-                    if (isProductOrdered)
-                    {
-                        return BadRequest($"The product '{product.ProductName}' has already been ordered by another user.");
-                    }
-
-                    if (product.IsSold)
-                    {
-                        return BadRequest($"The product '{product.ProductName}' is already sold.");
-                    }
-                    if (product.ProductStatus == "Rejected")
-                    {
-                        return BadRequest($"The product '{product.ProductName}' is rejected.");
-                    }
-
-                    totalAmount += product.ProductPrice;
-
-                    // Create new order with "Processing" status directly
-                    var newOrder = new Order
-                    {
-                        UserId = orderRequest.UserId,
-                        ProductId = product.ProductId,
-                        CartId = cartItem.CartId,
-                        OrderDate = DateTime.UtcNow,
-                        TotalAmount = product.ProductPrice,
-                        OrderStatus = "Processing"
-                        // Note: Payment details are now handled in the Payment table
-                    };
-
-                    newOrders.Add(newOrder);
-                }
-
-                Console.WriteLine($"🚀 Debug: Orders to Insert: {newOrders.Count}");
-
-                _context.Orders.AddRange(newOrders);
-                await _context.SaveChangesAsync();
-                Console.WriteLine("✅ Debug: Orders Saved to Database");
-
-                // Mark Product as Sold
-                foreach (var cartItem in cartItems)
-                {
-                    var product = await _context.Products.FindAsync(cartItem.ProductId);
-                    if (product != null)
-                    {
-                        product.IsSold = true;
-                        product.ProductStatus = "Sold"; // Update product status directly
-                        _context.Products.Update(product);
-                    }
-                }
+                    OrderId = order.OrderId,
+                    ProductId = c.ProductId,
+                    Quantity = 1
+                });
+                _context.OrderItems.AddRange(orderItems);
                 await _context.SaveChangesAsync();
 
-                // Create payment records if payment method was provided
+                // 5) record a single Payment
                 if (!string.IsNullOrEmpty(orderRequest.PaymentMethod))
                 {
-                    foreach (var order in newOrders)
+                    var payment = new Payment
                     {
-                        var payment = new Payment
-                        {
-                            OrderId = order.OrderId,
-                            PaymentMethod = orderRequest.PaymentMethod,
-                            PaymentStatus = "Completed",
-                            Amount = order.TotalAmount,
-                            PaymentDate = DateTime.UtcNow
-                        };
-
-                        _context.Payments.Add(payment);
-                    }
+                        OrderId = order.OrderId,
+                        PaymentMethod = orderRequest.PaymentMethod,
+                        PaymentStatus = "Completed",
+                        Amount = totalAmount,
+                        PaymentDate = DateTime.UtcNow
+                    };
+                    _context.Payments.Add(payment);
                     await _context.SaveChangesAsync();
                 }
 
-                // Remove purchased cart items
+                // 6) mark products sold
+                foreach (var c in cartItems)
+                {
+                    var prod = await _context.Products.FindAsync(c.ProductId);
+                    if (prod != null)
+                    {
+                        prod.IsSold = true;
+                        prod.ProductStatus = "Sold";
+                    }
+                }
+                await _context.SaveChangesAsync();
+
+                // 7) remove cart entries
                 _context.Carts.RemoveRange(cartItems);
                 await _context.SaveChangesAsync();
-                Console.WriteLine("✅ Debug: Cart Items Removed");
 
-                await transaction.CommitAsync();
-                Console.WriteLine("🎉 Debug: Transaction Committed");
-
+                await tx.CommitAsync();
                 return Ok(new
                 {
                     message = "Order placed successfully!",
-                    totalAmount,
-                    orderId = newOrders.FirstOrDefault()?.OrderId // Return the first order ID for redirection
+                    orderId = order.OrderId,
+                    totalAmount
                 });
             }
             catch (Exception ex)
             {
-                await transaction.RollbackAsync();
-                Console.WriteLine($"❌ Error: {ex.Message}");
-                return StatusCode(500, $"Error saving order: {ex.Message}");
+                await tx.RollbackAsync();
+                return StatusCode(500, $"Error placing order: {ex.Message}");
             }
         }
 
@@ -281,18 +334,28 @@ namespace SecondHandPlatform.Controllers
                 return BadRequest("Cannot cancel a completed order.");
             }
 
-            // Update product status when cancelling order
-            var product = await _context.Products.FindAsync(order.ProductId);
-            if (product != null)
-            {
-                product.IsSold = false;
-                product.ProductStatus = "Available"; // Reset product status to available
-                _context.Products.Update(product);
-                await _context.SaveChangesAsync();
-            }
+            // load line items
+            var items = await _context.OrderItems
+                .Where(oi => oi.OrderId == id)
+                .ToListAsync();
 
+            // un-sell each product
+            foreach (var oi in items)
+            {
+                var p = await _context.Products.FindAsync(oi.ProductId);
+                if (p != null)
+                {
+                    p.IsSold = false;
+                    p.ProductStatus = "Available";
+                }
+            }
+            await _context.SaveChangesAsync();
+
+            // delete orderitems + order
+            _context.OrderItems.RemoveRange(items);
             _context.Orders.Remove(order);
             await _context.SaveChangesAsync();
+
             return Ok(new { message = "Order canceled successfully!" });
         }
     }
@@ -301,7 +364,7 @@ namespace SecondHandPlatform.Controllers
     public class OrderRequest
     {
         public int UserId { get; set; }
-        public int CartId { get; set; }
+        public List<int> CartIds { get; set; }
         public string PaymentMethod { get; set; }
         public string StripePaymentIntentId { get; set; }
     }
@@ -318,6 +381,7 @@ namespace SecondHandPlatform.Controllers
 
         // line items
         public List<OrderItemDto> Items { get; set; } = new();
+        public decimal TotalAmount { get; set; }
 
         // payment
         public string PaymentMethod { get; set; } = "";

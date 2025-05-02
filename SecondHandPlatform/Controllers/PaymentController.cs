@@ -90,114 +90,104 @@ namespace SecondHandPlatform.Controllers
         [HttpPost("process-payment")]
         public async Task<IActionResult> ProcessPayment([FromBody] DirectPaymentRequest request)
         {
-            if (request == null || request.UserId == 0 || string.IsNullOrEmpty(request.PaymentMethod))
+            // ── BASIC REQUEST VALIDATION ────────────────────────────────
+            if (request == null)
+                return BadRequest("Request body is required.");
+
+            if (request.UserId <= 0)
+                return BadRequest("A valid UserId is required.");
+
+            if (string.IsNullOrEmpty(request.PaymentMethod))
+                return BadRequest("A payment method is required.");
+
+            // ── LOAD CART & ENSURE NOT EMPTY ────────────────────────────
+            var cartItems = await _context.Carts
+                .Where(c => c.UserId == request.UserId)
+                .Include(c => c.Product)
+                .ToListAsync();
+
+            if (!cartItems.Any())
+                return BadRequest("Your cart is empty.");
+
+            // ── ITEM-LEVEL VALIDATIONS ──────────────────────────────────
+            foreach (var c in cartItems)
             {
-                return BadRequest("UserId and PaymentMethod are required.");
+                var p = c.Product;
+                if (p == null)
+                    return BadRequest($"Product ID {c.ProductId} not found.");
+
+                // Has this product ever been ordered before?
+                bool alreadyOrdered = await _context.OrderItems
+                    .AnyAsync(oi => oi.ProductId == p.ProductId);
+                if (alreadyOrdered)
+                    return BadRequest($"The product '{p.ProductName}' has already been ordered by another user.");
+
+                if (p.IsSold)
+                    return BadRequest($"The product '{p.ProductName}' is already sold.");
             }
+
+
+            // Calculate total amount
+            decimal totalAmount = cartItems.Sum(c => c.Product!.ProductPrice);
 
             using var transaction = await _context.Database.BeginTransactionAsync();
-            try
-            {
-                // First get the cart items
-                var cartItems = await _context.Carts
-                    .Where(c => c.UserId == request.UserId)
-                    .Include(c => c.Product)
-                    .ToListAsync();
+    try
+    {
+        // ── 1) CREATE A SINGLE ORDER ────────────────────────────
+        var order = new Order
+        {
+            UserId      = request.UserId,
+            OrderDate   = DateTime.UtcNow,
+            TotalAmount = totalAmount,
+            OrderStatus = "Processing"
+        };
+        _context.Orders.Add(order);
+        await _context.SaveChangesAsync();  // populates order.OrderId
 
-                if (!cartItems.Any())
-                {
-                    return BadRequest("Your cart is empty.");
-                }
+        // ── 2) CREATE ONE ORDERITEM PER CART ENTRY ─────────────
+        var items = cartItems.Select(c => new OrderItem
+        {
+            OrderId   = order.OrderId,
+            ProductId = c.ProductId,
+            Quantity  = 1
+        });
+        _context.OrderItems.AddRange(items);
+        await _context.SaveChangesAsync();
 
-                // Calculate total amount
-                decimal totalAmount = cartItems.Sum(item => item.Product.ProductPrice);
+        // ── 3) RECORD A SINGLE PAYMENT ──────────────────────────
+        var payment = new Payment
+        {
+            OrderId       = order.OrderId,
+            PaymentMethod = request.PaymentMethod,
+            PaymentStatus = "Completed",
+            Amount        = totalAmount,
+            PaymentDate   = DateTime.UtcNow
+        };
+        _context.Payments.Add(payment);
+        await _context.SaveChangesAsync();
 
-                // Create new orders for each cart item
-                var orders = new List<Order>();
-                foreach (var cartItem in cartItems)
-                {
-                    var product = cartItem.Product;
-                    if (product == null)
-                    {
-                        return BadRequest($"Product ID {cartItem.ProductId} not found.");
-                    }
-
-                    // Check if product is already ordered
-                    bool isProductOrdered = await _context.Orders.AnyAsync(o => o.ProductId == product.ProductId);
-                    if (isProductOrdered)
-                    {
-                        return BadRequest($"The product '{product.ProductName}' has already been ordered by another user.");
-                    }
-
-                    if (product.IsSold)
-                    {
-                        return BadRequest($"The product '{product.ProductName}' is already sold.");
-                    }
-
-                    // Create new order with "Processing" status directly
-                    var newOrder = new Order
-                    {
-                        UserId = request.UserId,
-                        ProductId = product.ProductId,
-                        CartId = cartItem.CartId,
-                        OrderDate = DateTime.UtcNow,
-                        TotalAmount = product.ProductPrice,
-                        OrderStatus = "Processing"
-                    };
-
-                    orders.Add(newOrder);
-                }
-
-                _context.Orders.AddRange(orders);
-                await _context.SaveChangesAsync();
-
-                // Create payment records
-                foreach (var order in orders)
-                {
-                    var payment = new Payment
-                    {
-                        OrderId = order.OrderId,
-                        PaymentMethod = request.PaymentMethod,
-                        PaymentStatus = "Completed",
-                        Amount = order.TotalAmount,
-                        PaymentDate = DateTime.UtcNow
-                    };
-
-                    _context.Payments.Add(payment);
-                }
-                await _context.SaveChangesAsync();
-
-                // Mark products as sold
-                foreach (var cartItem in cartItems)
-                {
-                    var product = await _context.Products.FindAsync(cartItem.ProductId);
-                    if (product != null)
-                    {
-                        product.IsSold = true;
-                        product.ProductStatus = "Sold";
-                        _context.Products.Update(product);
-                    }
-                }
-                await _context.SaveChangesAsync();
-
-                // Remove cart items
-                _context.Carts.RemoveRange(cartItems);
-                await _context.SaveChangesAsync();
-
-                await transaction.CommitAsync();
-
-                return Ok(new
-                {
-                    message = "Payment processed successfully!",
-                    orderId = orders.FirstOrDefault()?.OrderId
-                });
-            }
-            catch (Exception ex)
-            {
-                await transaction.RollbackAsync();
-                return StatusCode(500, new { error = $"An error occurred: {ex.Message}" });
-            }
+        // ── 4) MARK PRODUCTS AS SOLD ────────────────────────────
+        foreach (var c in cartItems)
+        {
+            var prod = await _context.Products.FindAsync(c.ProductId);
+            prod!.IsSold       = true;
+            prod.ProductStatus = "Sold";
         }
+        await _context.SaveChangesAsync();
+
+        // ── 5) REMOVE CART ITEMS ────────────────────────────────
+        _context.Carts.RemoveRange(cartItems);
+        await _context.SaveChangesAsync();
+
+        await transaction.CommitAsync();
+        return Ok(new { message = "Payment processed successfully!", orderId = order.OrderId });
+    }
+    catch (Exception ex)
+    {
+        await transaction.RollbackAsync();
+        return StatusCode(500, new { error = $"An error occurred: {ex.Message}" });
+    }
+}
 
         // Handle Stripe webhook events
         [HttpPost("webhook")]
@@ -240,87 +230,85 @@ namespace SecondHandPlatform.Controllers
         // Helper method to handle successful Stripe payments
         private async Task HandleSuccessfulPayment(PaymentIntent paymentIntent)
         {
-            // Extract userId from metadata
-            if (paymentIntent.Metadata.TryGetValue("userId", out string userIdString) &&
-                int.TryParse(userIdString, out int userId))
+            // Extract userId
+            if (!paymentIntent.Metadata.TryGetValue("userId", out var userIdStr)
+                || !int.TryParse(userIdStr, out var userId))
             {
-                // Get cart items for the user
-                var cartItems = await _context.Carts
+                return; // can't proceed
+            }
+
+            // Get cart items for the user
+            var cartItems = await _context.Carts
                     .Where(c => c.UserId == userId)
                     .Include(c => c.Product)
                     .ToListAsync();
+            if (!cartItems.Any())
+                return; // nothing to do
 
-                if (cartItems.Any())
+            await using var tx = await _context.Database.BeginTransactionAsync();
+            try
+            {
+                // Sum up total
+                var totalAmount = cartItems.Sum(c => c.Product!.ProductPrice);
+
+                // Create one Order
+                var order = new Order
                 {
-                    using var transaction = await _context.Database.BeginTransactionAsync();
-                    try
+                    UserId = userId,
+                    OrderDate = DateTime.UtcNow,
+                    TotalAmount = totalAmount,
+                    OrderStatus = "Processing"
+                };
+                _context.Orders.Add(order);
+                await _context.SaveChangesAsync();
+
+                // Create OrderItems
+                var orderItems = cartItems.Select(c => new OrderItem
+                {
+                    OrderId = order.OrderId,
+                    ProductId = c.ProductId,
+                    Quantity = 1
+                });
+                _context.OrderItems.AddRange(orderItems);
+                await _context.SaveChangesAsync();
+
+                // Create single Payment
+                var payment = new Payment
+                {
+                    OrderId = order.OrderId,
+                    PaymentMethod = "Credit Card (Stripe)",
+                    PaymentStatus = "Completed",
+                    Amount = totalAmount,
+                    PaymentDate = DateTime.UtcNow
+                };
+                _context.Payments.Add(payment);
+                await _context.SaveChangesAsync();
+
+                // Mark products sold
+                foreach (var c in cartItems)
+                {
+                    var p = await _context.Products.FindAsync(c.ProductId);
+                    if (p != null)
                     {
-                        // Create orders for each cart item
-                        var orders = new List<Order>();
-                        foreach (var cartItem in cartItems)
-                        {
-                            var product = cartItem.Product;
-
-                            // Create order
-                            var order = new Order
-                            {
-                                UserId = userId,
-                                ProductId = product.ProductId,
-                                CartId = cartItem.CartId,
-                                OrderDate = DateTime.UtcNow,
-                                TotalAmount = product.ProductPrice,
-                                OrderStatus = "Processing"
-                            };
-
-                            orders.Add(order);
-                        }
-
-                        _context.Orders.AddRange(orders);
-                        await _context.SaveChangesAsync();
-
-                        // Create payment records
-                        foreach (var order in orders)
-                        {
-                            var payment = new Payment
-                            {
-                                OrderId = order.OrderId,
-                                PaymentMethod = "Credit Card (Stripe)",
-                                PaymentStatus = "Completed",
-                                Amount = order.TotalAmount,
-                                PaymentDate = DateTime.UtcNow
-                            };
-
-                            _context.Payments.Add(payment);
-                        }
-                        await _context.SaveChangesAsync();
-
-                        // Mark products as sold
-                        foreach (var cartItem in cartItems)
-                        {
-                            var product = await _context.Products.FindAsync(cartItem.ProductId);
-                            if (product != null)
-                            {
-                                product.IsSold = true;
-                                product.ProductStatus = "Sold";
-                                _context.Products.Update(product);
-                            }
-                        }
-                        await _context.SaveChangesAsync();
-
-                        // Remove cart items
-                        _context.Carts.RemoveRange(cartItems);
-                        await _context.SaveChangesAsync();
-
-                        await transaction.CommitAsync();
-                    }
-                    catch (Exception)
-                    {
-                        await transaction.RollbackAsync();
-                        throw;
+                        p.IsSold = true;
+                        p.ProductStatus = "Sold";
                     }
                 }
+                await _context.SaveChangesAsync();
+
+                // Remove cart items
+                _context.Carts.RemoveRange(cartItems);
+                await _context.SaveChangesAsync();
+
+                await tx.CommitAsync();
+            }
+            catch
+            {
+                await tx.RollbackAsync();
+                throw;
             }
         }
+
 
         // Helper method to handle failed Stripe payments
         private async Task HandleFailedPayment(PaymentIntent paymentIntent)

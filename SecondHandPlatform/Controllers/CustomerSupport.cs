@@ -1,7 +1,6 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using SecondHandPlatform.Models;
-using SecondHandPlatform.Data;
 using SecondHandPlatform.Services;
 using System;
 using System.Collections.Generic;
@@ -20,11 +19,11 @@ namespace SecondHandPlatformTest.Controllers
     [Route("api/[controller]")]
     public class CustomerSupportController : ControllerBase
     {
-        private readonly ApplicationDbContext _context;
+        private readonly SecondhandplatformContext _context;
         private readonly IEmailService _email;
 
         public CustomerSupportController(
-            ApplicationDbContext context,
+            SecondhandplatformContext context,
             IEmailService email)
         {
             _context = context ?? throw new ArgumentNullException(nameof(context));

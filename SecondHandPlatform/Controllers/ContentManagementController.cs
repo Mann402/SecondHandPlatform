@@ -1,7 +1,6 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using SecondHandPlatform.Models;
-using SecondHandPlatform.Data;
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
@@ -12,9 +11,9 @@ namespace SecondHandPlatform.Controllers
     [ApiController]
     public class ContentManagementController : ControllerBase
     {
-        private readonly ApplicationDbContext _context;
+        private readonly SecondhandplatformContext _context;
 
-        public ContentManagementController(ApplicationDbContext context)
+        public ContentManagementController(SecondhandplatformContext context)
         {
             _context = context;
         }

@@ -15,5 +15,7 @@ namespace SecondHandPlatform.Interfaces
         Task DeleteProductAsync(int id);
         Task VerifyProductAsync(int productId);
         Task RejectProductAsync(int productId);
+        Task<IEnumerable<Product>> GetByCategorySlugAsync(string slug);
+
     }
 }

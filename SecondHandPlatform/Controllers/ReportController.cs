@@ -1,7 +1,6 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
-using SecondHandPlatform.Data;
 using SecondHandPlatform.Models;
 using System;
 using System.Collections.Generic;
@@ -14,10 +13,10 @@ namespace SecondHandPlatformTest.Controllers
     [ApiController]
     public class ReportController : ControllerBase
     {
-        private readonly ApplicationDbContext _context;
+        private readonly SecondhandplatformContext _context;
         private readonly ILogger<ReportController> _logger;
 
-        public ReportController(ApplicationDbContext context, ILogger<ReportController> logger)
+        public ReportController(SecondhandplatformContext context, ILogger<ReportController> logger)
         {
             _context = context;
             _logger = logger;
@@ -31,10 +30,16 @@ namespace SecondHandPlatformTest.Controllers
             {
                 // Filter out records with null price values before grouping
                 var summary = await _context.Products
-                    .GroupBy(p => p.ProductCategory)
+                    .Include(p => p.Category)
+                    .GroupBy(p => new {
+                        p.CategoryId,
+                        Name = p.Category.Name
+                    })
                     .Select(g => new CategorySummaryDto
                     {
-                        Category = g.Key,
+                        CategoryId = g.Key.CategoryId,
+                        CategoryName = g.Key.Name,
+
                         // All products in the category
                         ProductCount = g.Count(),
 
@@ -49,9 +54,12 @@ namespace SecondHandPlatformTest.Controllers
                     .ToListAsync();
 
                 var debugList = await _context.Products
+                    .Include(p => p.Category)
                     .Select(p => new {
                         p.ProductId,
-                        p.ProductCategory,
+                        CategoryId = p.CategoryId,
+                        CategoryName = p.Category.Name,
+
                         p.ProductPrice,
                         p.VerifiedPrice
                     })
@@ -107,7 +115,8 @@ namespace SecondHandPlatformTest.Controllers
     // DTO for Category Summary Report
     public class CategorySummaryDto
     {
-        public string Category { get; set; }
+        public int CategoryId { get; set; }
+        public string CategoryName { get; set; } = null!;
         public int ProductCount { get; set; }
         public decimal AverageBasePrice { get; set; }
         public decimal AverageVerifiedPrice { get; set; }

@@ -19,5 +19,7 @@ public partial class Feedback
     public DateTime DateSubmitted { get; set; } = DateTime.UtcNow;
     public virtual Product ? Product { get; set; }
 
-    public virtual User?  User { get; set; } 
+    public virtual User?  User { get; set; }
+
+
 }
